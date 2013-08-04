@@ -23,7 +23,10 @@ struct filelist
 struct windowlist
 {
 	struct windowlist* next;
-
+	WINDOW* title;
+	WINDOW* content;
+	char* fullname;
+	struct stat info;
 };
 
 WINDOW** winlist;
