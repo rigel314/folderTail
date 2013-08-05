@@ -3,12 +3,12 @@
  *
  *  Created on: Aug 3, 2013
  *      Author: cody
- *  TODO: Actually get file info for title
- *  TODO: Refresh title every 'tick'
  *  TODO: tail -f
  *  TODO: Rescan for files
  *    TODO: Add and remove files, windows, etc as necessary
  */
+
+typedef enum { false=0, true=1 } bool;
 
 #include <ncurses.h>
 #include <stdio.h>
@@ -19,6 +19,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <math.h>
 
 struct windowlist
 {
@@ -34,12 +36,16 @@ int numSplits = 0;
 struct filelist* filelist = NULL;
 
 void mkWins(struct windowlist* ent);
+char* getSizeStr(int size);
 void writeTitles(struct windowlist* list);
+void writeAllRefresh(struct windowlist* list);
 void refreshAll(struct windowlist* list);
 void resizeAll(struct windowlist* list);
+void rescanFiles();
 void findAllFiles(struct windowlist** list, char* path);
 struct windowlist* winAtIndex(struct windowlist* list, int index);
 void addFile(struct windowlist** list, char* name, struct stat statinfo);
+void freeFile(struct windowlist** list, struct windowlist* win);
 
 void help()
 {
@@ -72,8 +78,8 @@ int main(int argc, char** argv)
 
 	findAllFiles(&winlist, argv[1]);
 //	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
-//		printf("%s\t%d\n", ptr->fullname, (int) ptr->info.st_size);
-
+//		printf("%s\t%s\n", ptr->fullname, getSizeStr((int) ptr->info.st_size));
+//
 //	return 0;
 
 	initscr();
@@ -95,12 +101,15 @@ int main(int argc, char** argv)
 	{
 		switch(c)
 		{
+			case 'Q':
+			case 'q':
 			case 10:
 				endwin();
 				return 0;
 				break;
 		}
-		refreshAll(winlist);
+		rescanFiles();
+		writeAllRefresh(winlist);
 	}
 
 	return 0;
@@ -144,10 +153,58 @@ void mkWins(struct windowlist* ent)
 //	return;
 //}
 
+char* getSizeStr(int size)
+{
+	char* cat;
+	char* out;
+	int i, len;
+	int s = size;
+	for(i = 24; !(s/(int)pow(10, i)) && i; i-=3);
+	switch(i)
+	{
+		case 24:
+			cat = "YB";
+			break;
+		case 21:
+			cat = "ZB";
+			break;
+		case 18:
+			cat = "EB";
+			break;
+		case 15:
+			cat = "PB";
+			break;
+		case 12:
+			cat = "TB";
+			break;
+		case 9:
+			cat = "GB";
+			break;
+		case 6:
+			cat = "MB";
+			break;
+		case 3:
+			cat = "KB";
+			break;
+		case 0:
+			cat = "B";
+			break;
+	}
+
+	len = snprintf(NULL, 0, "%d%s", s/(int)pow(10, i), cat);
+	out = malloc(len);
+	if (!out)
+		return NULL;
+	sprintf(out, "%d%s", s/(int)pow(10, i), cat);
+	return out;
+}
+
 void writeTitles(struct windowlist* list)
 {
 	struct windowlist* ptr;
+	struct tm time;
 	int r, c, len, i;
+	char* size;
 
 	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
@@ -163,12 +220,35 @@ void writeTitles(struct windowlist* list)
 		mvwprintw(ptr->title, r-1, 0, "%s", ptr->fullname);
 
 		// Right aligned file info
-		len = snprintf(NULL, 0, "%s - %s", "12KB", "2013/08/05 00:24:24");
-		mvwprintw(ptr->title, r-1, c-len, "%s - %s", "12KB", "2013/08/05 00:24:24");
+		size = getSizeStr((int) ptr->info.st_size);
+		if(!size)
+			continue;
+		localtime_r(&ptr->info.st_mtime, &time);
+		len = snprintf(NULL, 0, "%s - %d/%.2d/%.2d %.2d:%.2d:%.2d", size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+		mvwprintw(ptr->title, r-1, c-len, "%s - %d/%.2d/%.2d %.2d:%.2d:%.2d", size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+		free(size);
 
 		// Stop highlighting
 		wattroff(ptr->title, A_STANDOUT);
 	}
+}
+
+void writeContents(struct windowlist* list)
+{
+	struct windowlist* ptr;
+
+	for(ptr = list; ptr != NULL; ptr = ptr->next)
+	{
+		mvwprintw(ptr->content, 0, 0, "Blargity blarg pants");
+	}
+}
+
+void writeAllRefresh(struct windowlist* list)
+{
+	writeContents(list);
+	writeTitles(list);
+	refreshAll(list);
+	return;
 }
 
 void refreshAll(struct windowlist* list)
@@ -217,6 +297,50 @@ void resizeAll(struct windowlist* list)
 	}
 }
 
+void rescanFiles(struct windowlist** list, char* path)
+{
+//	DIR* dp;
+//	int st;
+//	char* fullname;
+//	struct stat* statbuf;
+//	struct dirent* dir;
+//
+//	fullname = strdup(path);
+//	if(!fullname)
+//		return;
+//
+//	statbuf = malloc(sizeof(struct stat));
+//	if(!statbuf)
+//		return;
+//
+//	dp = opendir(path);
+//	while ((dir = readdir(dp)) != NULL)
+//	{
+//		fullname = realloc(fullname, sizeof(char) * (strlen(path) + strlen(dir->d_name) + 2));
+//		if(!fullname)
+//			return;
+//		sprintf(fullname+strlen(path), "/%s", dir->d_name);
+//		st = stat(fullname, statbuf);
+//		if(!st && S_ISREG(statbuf->st_mode))
+//			addFile(list, fullname, *statbuf);
+//	}
+//	closedir(dp);
+
+	return;
+}
+
+bool fileExistsInList(struct windowlist* list, char* name)
+{
+	struct windowlist* ptr;
+
+	for(ptr=list; ptr!=NULL; ptr=ptr->next)
+	{
+		if(!strcmp(ptr->fullname, name))
+			return true;
+	}
+	return false;
+}
+
 void findAllFiles(struct windowlist** list, char* path)
 {
 	DIR* dp;
@@ -241,7 +365,7 @@ void findAllFiles(struct windowlist** list, char* path)
 			return;
 		sprintf(fullname+strlen(path), "/%s", dir->d_name);
 		st = stat(fullname, statbuf);
-		if(!st && S_ISREG(statbuf->st_mode))
+		if(!st && S_ISREG(statbuf->st_mode) && !fileExistsInList(*list, fullname))
 			addFile(list, fullname, *statbuf);
 	}
 	closedir(dp);
@@ -284,4 +408,30 @@ void addFile(struct windowlist** list, char* name, struct stat statinfo)
 	for(ptr = *list; ptr->next != NULL; ptr = ptr->next);
 
 	ptr->next = new;
+}
+
+void freeFile(struct windowlist** list, struct windowlist* win)
+{
+	struct windowlist* ptr;
+	struct windowlist* last = NULL;
+
+	for(ptr=*list; ptr!=NULL; ptr=ptr->next)
+	{
+		if(ptr->next == win)
+			last = ptr;
+
+		if(ptr == win)
+		{
+			delwin(ptr->content);
+			delwin(ptr->title);
+			free(ptr->fullname);
+			if(last)
+				last->next = ptr->next;
+			else
+				*list = ptr->next;
+			free(ptr);
+			return;
+		}
+	}
+	return;
 }
