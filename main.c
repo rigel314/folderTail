@@ -3,6 +3,11 @@
  *
  *  Created on: Aug 3, 2013
  *      Author: cody
+ *  TODO: Actually get file info for title
+ *  TODO: Refresh title every 'tick'
+ *  TODO: tail -f
+ *  TODO: Rescan for files
+ *    TODO: Add and remove files, windows, etc as necessary
  */
 
 #include <ncurses.h>
@@ -15,11 +20,6 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-struct filelist
-{
-	struct filelist* next;
-	char* name;
-};
 struct windowlist
 {
 	struct windowlist* next;
@@ -29,17 +29,17 @@ struct windowlist
 	struct stat info;
 };
 
-WINDOW** winlist;
+struct windowlist* winlist;
 int numSplits = 0;
 struct filelist* filelist = NULL;
 
-void split();
-void unsplit(WINDOW* win);
-void refreshAll(WINDOW** winlist, int numWins);
-void resizeAll(WINDOW** winlist, int numWins);
-void findAllFiles(struct filelist** list, char* path);
-struct filelist* fileAtIndex(struct filelist* list, int index);
-void addFile(struct filelist** list, char* name);
+void mkWins(struct windowlist* ent);
+void writeTitles(struct windowlist* list);
+void refreshAll(struct windowlist* list);
+void resizeAll(struct windowlist* list);
+void findAllFiles(struct windowlist** list, char* path);
+struct windowlist* winAtIndex(struct windowlist* list, int index);
+void addFile(struct windowlist** list, char* name, struct stat statinfo);
 
 void help()
 {
@@ -54,25 +54,25 @@ int main(int argc, char** argv)
 {
 	int c;
 	DIR* dp;
-	struct filelist* ptr;
+	struct windowlist* ptr;
 
 	if(argc != 2)
 	{
 		help();
-		return 2;
+		return 1;
 	}
 
 	dp = opendir(argv[1]);
 	if(!dp)
 	{
 		printf("Error opening directory: %s\nopendir returns: %d\n", argv[1], errno);
-		return 3;
+		return 2;
 	}
 	closedir(dp);
 
-	findAllFiles(&filelist, argv[1]);
-//	for(ptr = filelist; ptr != NULL; ptr = ptr->next)
-//		printf("%s\n", ptr->name);
+	findAllFiles(&winlist, argv[1]);
+//	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
+//		printf("%s\t%d\n", ptr->fullname, (int) ptr->info.st_size);
 
 //	return 0;
 
@@ -81,112 +81,143 @@ int main(int argc, char** argv)
 	noecho();
 	curs_set(0);
 	keypad(stdscr,TRUE);
+	halfdelay(3);
 	refresh();
 
-	for(ptr = filelist; ptr != NULL; ptr = ptr->next)
-		split();
-	refreshAll(winlist, numSplits);
+	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
+		mkWins(ptr);
+
+	resizeAll(winlist);
+	writeTitles(winlist);
+	refreshAll(winlist);
 
 	while((c = getch()))
 	{
 		switch(c)
 		{
-		case KEY_DOWN:
-			if(winlist)
-				unsplit(winlist[numSplits-1]);
-			break;
-		case KEY_UP:
-			split();
-			break;
-		case 10:
-			endwin();
-			return 0;
-			break;
+			case 10:
+				endwin();
+				return 0;
+				break;
 		}
-		refreshAll(winlist, numSplits);
+		refreshAll(winlist);
 	}
 
 	return 0;
 }
 
-void split()
+void mkWins(struct windowlist* ent)
 {
-	winlist = realloc(winlist, sizeof(WINDOW*) * ++numSplits);
-	if(!winlist)
-		return;
-
-	winlist[numSplits-1] = newwin(0,0,0,0);
-	resizeAll(winlist, numSplits);
-}
-
-void unsplit(WINDOW* win)
-{
-	int i;
-	int flag = 0;
-
-	for(i = 0; i<numSplits; i++)
-	{
-		if(flag == 1)
-			winlist[i-1] = winlist[i];
-		if(winlist[i] == win)
-		{
-			flag = 1;
-			werase(win);
-			refreshAll(winlist, numSplits);
-			delwin(win);
-		}
-	}
-	if(!flag)
-		return;
-
-	if(!numSplits)
-		return;
-
-	winlist = realloc(winlist, sizeof(WINDOW*) * --numSplits);
-	if(!winlist)
-		return;
-
-	resizeAll(winlist, numSplits);
+	ent->title = newwin(0, 0, 0, 0);
+	ent->content = subwin(ent->title, 0, 0, 0, 0);
 	return;
 }
 
-void refreshAll(WINDOW** wins, int numWins)
-{
-	int i;
+//void unsplit(WINDOW* win)
+//{
+//	int i;
+//	int flag = 0;
+//
+//	for(i = 0; i<numSplits; i++)
+//	{
+//		if(flag == 1)
+//			winlist[i-1] = winlist[i];
+//		if(winlist[i] == win)
+//		{
+//			flag = 1;
+//			werase(win);
+//			refreshAll(winlist, numSplits);
+//			delwin(win);
+//		}
+//	}
+//	if(!flag)
+//		return;
+//
+//	if(!numSplits)
+//		return;
+//
+//	winlist = realloc(winlist, sizeof(WINDOW*) * --numSplits);
+//	if(!winlist)
+//		return;
+//
+//	resizeAll(winlist, numSplits);
+//	return;
+//}
 
-	for(i = 0; i < numWins; i++)
+void writeTitles(struct windowlist* list)
+{
+	struct windowlist* ptr;
+	int r, c, len, i;
+
+	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
-		wrefresh(wins[i]);
+		getmaxyx(ptr->title, r, c);
+
+		// Make a line.
+		wmove(ptr->title, r-1, 0);
+		wattron(ptr->title, A_STANDOUT);
+		for(i = 0; i < c; i++)
+			waddch(ptr->title, ' ');
+
+		// Left aligned file name
+		mvwprintw(ptr->title, r-1, 0, "%s", ptr->fullname);
+
+		// Right aligned file info
+		len = snprintf(NULL, 0, "%s - %s", "12KB", "2013/08/05 00:24:24");
+		mvwprintw(ptr->title, r-1, c-len, "%s - %s", "12KB", "2013/08/05 00:24:24");
+
+		// Stop highlighting
+		wattroff(ptr->title, A_STANDOUT);
 	}
 }
 
-void resizeAll(WINDOW** wins, int numWins)
+void refreshAll(struct windowlist* list)
 {
-	if(!wins || !numWins)
+	struct windowlist* ptr;
+
+	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
+	{
+		wrefresh(ptr->title);
+		touchwin(ptr->title);
+		wrefresh(ptr->content);
+	}
+}
+
+void resizeAll(struct windowlist* list)
+{
+	if(!list)
 		return;
 
 	int i;
-	int counter = LINES%numWins;
+	int counter;
+	int numWins;
+	struct windowlist* ptr;
 
-	for(i = 0; i < numWins; i++)
+	for(numWins = 0, ptr=list; ptr!=NULL; ptr=ptr->next, numWins++);
+
+	counter = LINES%numWins;
+
+	for(i = 0, ptr=list; i < numWins; ptr=ptr->next, i++)
 	{
 		if(i<counter)
 		{
-			wresize(wins[i], LINES/numWins+1, COLS);
-			mvwin(wins[i], (LINES/numWins+1) * i, 0);
+			wresize(ptr->title, LINES/numWins+1, COLS);
+			mvwin(ptr->title, (LINES/numWins+1) * i, 0);
+			wresize(ptr->content, LINES/numWins, COLS);
 		}
 		else
 		{
-			wresize(wins[i], LINES/numWins, COLS);
-			mvwin(wins[i], counter + (LINES/numWins) * i, 0);
+			wresize(ptr->title, LINES/numWins, COLS);
+			mvwin(ptr->title, counter + (LINES/numWins) * i, 0);
+			wresize(ptr->content, LINES/numWins-1, COLS);
 		}
-		werase(wins[i]);
-		mvwprintw(wins[i], 1, 1, "%s", fileAtIndex(filelist, i)->name);
-		box(wins[i], 0, 0);
+		werase(ptr->title);
+//		mvwprintw(ptr->title, 1, 1, "%s", "test");
+//		box(wins[i], 0, 0);
 	}
 }
 
-void findAllFiles(struct filelist** list, char* path)
+void findAllFiles(struct windowlist** list, char* path)
 {
 	DIR* dp;
 	int st;
@@ -211,14 +242,14 @@ void findAllFiles(struct filelist** list, char* path)
 		sprintf(fullname+strlen(path), "/%s", dir->d_name);
 		st = stat(fullname, statbuf);
 		if(!st && S_ISREG(statbuf->st_mode))
-			addFile(list, fullname);
+			addFile(list, fullname, *statbuf);
 	}
 	closedir(dp);
 
 	return;
 }
 
-struct filelist* fileAtIndex(struct filelist* list, int index)
+struct windowlist* winAtIndex(struct windowlist* list, int index)
 {
 	int i;
 
@@ -226,29 +257,22 @@ struct filelist* fileAtIndex(struct filelist* list, int index)
 	return list;
 }
 
-void addFile(struct filelist** list, char* name)
+void addFile(struct windowlist** list, char* name, struct stat statinfo)
 {
-	struct filelist* ptr;
+	struct windowlist* ptr;
 
 	if(!list)
-	{
-		printf("died");
 		return;
-	}
 
-	struct filelist* new = malloc(sizeof(struct filelist));
+	struct windowlist* new = malloc(sizeof(struct windowlist));
 	if(!new)
-	{
-		printf("died");
 		return;
-	}
 
-	new->name = strdup(name);
-	if(!new->name)
-	{
-		printf("died");
+	new->fullname = strdup(name);
+	if(!new->fullname)
 		return;
-	}
+
+	new->info = statinfo;
 
 	if(!*list)
 	{
