@@ -13,3 +13,8 @@ $(builddir)/main.o :
 
 install : $(out)
 	cp $(out) /usr/local/bin
+
+clean :
+	-rm build/*
+uninstall :
+	-rm /usr/local/bin/folderTail

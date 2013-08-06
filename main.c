@@ -292,7 +292,7 @@ void writeContents(struct windowlist* list)
 
 	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
-		if(ptr->err == -1)
+		if(ptr->err)
 			mvwprintw(ptr->content, 0, 0, "ERROR: %d: %s ", ptr->err, strerror(ptr->err));
 	}
 }
@@ -480,6 +480,7 @@ void addFile(struct windowlist** list, char* name, struct stat statinfo)
 	new->next = NULL;
 	mkWins(new);
 
+	new->err = 0;
 	new->pid = -1;
 	new->fd = -1;
 	new->wfd = -1;
