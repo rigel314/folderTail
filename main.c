@@ -4,8 +4,7 @@
  *  Created on: Aug 3, 2013
  *      Author: cody
  *  TODO: tail -f
- *  TODO: Rescan for files
- *    TODO: Add and remove files, windows, etc as necessary
+ *  TODO: reap processes & close file descriptors
  */
 
 typedef enum { false=0, true=1 } bool;
@@ -35,13 +34,16 @@ struct windowlist* winlist;
 int numSplits = 0;
 struct filelist* filelist = NULL;
 
+void help();
 void mkWins(struct windowlist* ent);
 char* getSizeStr(int size);
 void writeTitles(struct windowlist* list);
+void writeContents(struct windowlist* list);
 void writeAllRefresh(struct windowlist* list);
 void refreshAll(struct windowlist* list);
 void resizeAll(struct windowlist* list);
-void rescanFiles();
+void rescanFiles(struct windowlist** list, char* path);
+bool fileExistsInList(struct windowlist* list, char* name);
 void findAllFiles(struct windowlist** list, char* path);
 struct windowlist* winAtIndex(struct windowlist* list, int index);
 void addFile(struct windowlist** list, char* name, struct stat statinfo);
@@ -50,17 +52,17 @@ void freeFile(struct windowlist** list, struct windowlist* win);
 void help()
 {
 	printf(
-			"folderTail 0.1 ( http://computingeureka.com )\n"
-			"Usage: folderTail <path-to-folder>\n\n"
-			"Starts tail -f on each file or link that is a direct child of path-to-folder.\n"
-			);
+		"folderTail 0.1 ( http://computingeureka.com )\n"
+		"Usage: folderTail <path-to-folder>\n\n"
+		"Starts tail -f on each file or link that is a direct child of path-to-folder.\n"
+	);
 }
 
 int main(int argc, char** argv)
 {
 	int c;
 	DIR* dp;
-	struct windowlist* ptr;
+//	struct windowlist* ptr;
 
 	if(argc != 2)
 	{
@@ -76,7 +78,7 @@ int main(int argc, char** argv)
 	}
 	closedir(dp);
 
-	findAllFiles(&winlist, argv[1]);
+//	findAllFiles(&winlist, argv[1]);
 //	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
 //		printf("%s\t%s\n", ptr->fullname, getSizeStr((int) ptr->info.st_size));
 //
@@ -90,12 +92,13 @@ int main(int argc, char** argv)
 	halfdelay(3);
 	refresh();
 
-	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
-		mkWins(ptr);
-
-	resizeAll(winlist);
-	writeTitles(winlist);
-	refreshAll(winlist);
+//	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
+//		mkWins(ptr);
+//	findAllFiles(&winlist, argv[1]);
+//	writeAllRefresh(winlist);
+//	resizeAll(winlist);
+//	writeTitles(winlist);
+//	refreshAll(winlist);
 
 	while((c = getch()))
 	{
@@ -108,7 +111,7 @@ int main(int argc, char** argv)
 				return 0;
 				break;
 		}
-		rescanFiles();
+		rescanFiles(&winlist, argv[1]);
 		writeAllRefresh(winlist);
 	}
 
@@ -121,37 +124,6 @@ void mkWins(struct windowlist* ent)
 	ent->content = subwin(ent->title, 0, 0, 0, 0);
 	return;
 }
-
-//void unsplit(WINDOW* win)
-//{
-//	int i;
-//	int flag = 0;
-//
-//	for(i = 0; i<numSplits; i++)
-//	{
-//		if(flag == 1)
-//			winlist[i-1] = winlist[i];
-//		if(winlist[i] == win)
-//		{
-//			flag = 1;
-//			werase(win);
-//			refreshAll(winlist, numSplits);
-//			delwin(win);
-//		}
-//	}
-//	if(!flag)
-//		return;
-//
-//	if(!numSplits)
-//		return;
-//
-//	winlist = realloc(winlist, sizeof(WINDOW*) * --numSplits);
-//	if(!winlist)
-//		return;
-//
-//	resizeAll(winlist, numSplits);
-//	return;
-//}
 
 char* getSizeStr(int size)
 {
@@ -245,6 +217,7 @@ void writeContents(struct windowlist* list)
 
 void writeAllRefresh(struct windowlist* list)
 {
+	resizeAll(list);
 	writeContents(list);
 	writeTitles(list);
 	refreshAll(list);
@@ -299,34 +272,34 @@ void resizeAll(struct windowlist* list)
 
 void rescanFiles(struct windowlist** list, char* path)
 {
-//	DIR* dp;
-//	int st;
-//	char* fullname;
-//	struct stat* statbuf;
-//	struct dirent* dir;
-//
-//	fullname = strdup(path);
-//	if(!fullname)
-//		return;
-//
-//	statbuf = malloc(sizeof(struct stat));
-//	if(!statbuf)
-//		return;
-//
-//	dp = opendir(path);
-//	while ((dir = readdir(dp)) != NULL)
-//	{
-//		fullname = realloc(fullname, sizeof(char) * (strlen(path) + strlen(dir->d_name) + 2));
-//		if(!fullname)
-//			return;
-//		sprintf(fullname+strlen(path), "/%s", dir->d_name);
-//		st = stat(fullname, statbuf);
-//		if(!st && S_ISREG(statbuf->st_mode))
-//			addFile(list, fullname, *statbuf);
-//	}
-//	closedir(dp);
+	struct windowlist* ptr;
+	struct windowlist* last;
+	int st;
 
-	return;
+	if(!list)
+		return;
+	if(!*list)
+	{ // If there aren't any files yet.
+		findAllFiles(list, path);
+		return;
+	}
+
+	last = (*list)->next;
+
+	// Delete windows for files that don't exist. And update the stat info for each.
+	for(ptr=*list; ptr!=NULL; ptr=ptr->next)
+	{
+		st = stat(ptr->fullname, &ptr->info);
+		if(st || !S_ISREG(ptr->info.st_mode))
+		{
+			freeFile(list, ptr);
+			ptr = last;
+		}
+		last = ptr;
+	}
+
+	// Get new windows.
+	findAllFiles(list, path);
 }
 
 bool fileExistsInList(struct windowlist* list, char* name)
@@ -370,7 +343,15 @@ void findAllFiles(struct windowlist** list, char* path)
 	}
 	closedir(dp);
 
-	return;
+	free(statbuf);
+}
+
+int winCount(struct windowlist* list, int index)
+{
+	int numWins;
+	struct windowlist* ptr;
+	for(numWins = 0, ptr=list; ptr!=NULL; ptr=ptr->next, numWins++);
+	return numWins;
 }
 
 struct windowlist* winAtIndex(struct windowlist* list, int index)
@@ -397,11 +378,12 @@ void addFile(struct windowlist** list, char* name, struct stat statinfo)
 		return;
 
 	new->info = statinfo;
+	new->next = NULL;
+	mkWins(new);
 
 	if(!*list)
 	{
 		*list = new;
-		(*list)->next = NULL;
 		return;
 	}
 
@@ -433,5 +415,4 @@ void freeFile(struct windowlist** list, struct windowlist* win)
 			return;
 		}
 	}
-	return;
 }
