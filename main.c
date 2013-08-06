@@ -118,6 +118,14 @@ int main(int argc, char** argv)
 	// Main loop for keypresses and files to be read.
 	while(1)
 	{
+		// Useful message instead of blank screen when no files.
+		if(!winlist)
+		{
+			clear();
+			mvprintw(0, 0, "No files.");
+			refresh();
+		}
+
 		// Maximum file descriptor.  Needed for select().  Start at zero to ensure it will be changed to a bigger one.
 		fdMax = 0;
 
@@ -381,6 +389,8 @@ void rescanFiles(struct windowlist** list, char* path)
 		if(st || !S_ISREG(ptr->info.st_mode))
 		{
 			freeFile(list, ptr);
+			if (!*list)
+				break;
 			ptr = last;
 		}
 		last = ptr;
@@ -513,6 +523,7 @@ void freeFile(struct windowlist** list, struct windowlist* win)
 
 		if(ptr == win)
 		{
+			werase(ptr->title);
 			delwin(ptr->content);
 			delwin(ptr->title);
 			free(ptr->fullname);
@@ -522,8 +533,7 @@ void freeFile(struct windowlist** list, struct windowlist* win)
 
 			if(last)
 				last->next = ptr->next;
-			else
-				*list = ptr->next;
+			*list = ptr->next;
 
 			free(ptr);
 			return;
