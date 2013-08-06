@@ -28,6 +28,8 @@ struct windowlist
 	WINDOW* content;
 	char* fullname;
 	struct stat info;
+	pid_t pid;
+	int fd;
 };
 
 struct windowlist* winlist;
@@ -92,13 +94,8 @@ int main(int argc, char** argv)
 	halfdelay(3);
 	refresh();
 
-//	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
-//		mkWins(ptr);
-//	findAllFiles(&winlist, argv[1]);
-//	writeAllRefresh(winlist);
-//	resizeAll(winlist);
-//	writeTitles(winlist);
-//	refreshAll(winlist);
+	rescanFiles(&winlist, argv[1]);
+	writeAllRefresh(winlist);
 
 	while((c = getch()))
 	{
@@ -122,6 +119,8 @@ void mkWins(struct windowlist* ent)
 {
 	ent->title = newwin(0, 0, 0, 0);
 	ent->content = subwin(ent->title, 0, 0, 0, 0);
+	scrollok(ent->content, true);
+	idlok(ent->content, true);
 	return;
 }
 
@@ -131,7 +130,7 @@ char* getSizeStr(int size)
 	char* out;
 	int i, len;
 	int s = size;
-	for(i = 24; !(s/(int)pow(10, i)) && i; i-=3);
+	for(i = 9; !(s/(int)pow(10, i)) && i; i-=3); // Maybe 'i' will start at 24 someday.
 	switch(i)
 	{
 		case 24:
@@ -208,10 +207,11 @@ void writeTitles(struct windowlist* list)
 void writeContents(struct windowlist* list)
 {
 	struct windowlist* ptr;
+	static int c = 0;
 
 	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
-		mvwprintw(ptr->content, 0, 0, "Blargity blarg pants");
+		wprintw(ptr->content, "test%d: %p\naoeu\n", c++, ptr);
 	}
 }
 
@@ -230,9 +230,8 @@ void refreshAll(struct windowlist* list)
 
 	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
 	{
+		touchwin(ptr->content);
 		wrefresh(ptr->title);
-		touchwin(ptr->title);
-		wrefresh(ptr->content);
 	}
 }
 
@@ -252,19 +251,24 @@ void resizeAll(struct windowlist* list)
 
 	for(i = 0, ptr=list; i < numWins; ptr=ptr->next, i++)
 	{
+		wmove(ptr->title, getmaxy(ptr->title)-1, 0);
+		wclrtoeol(ptr->title);
+
 		if(i<counter)
 		{
 			wresize(ptr->title, LINES/numWins+1, COLS);
 			mvwin(ptr->title, (LINES/numWins+1) * i, 0);
 			wresize(ptr->content, LINES/numWins, COLS);
+//			mvwin(ptr->content, (LINES/numWins+1) * i, 0);
 		}
 		else
 		{
 			wresize(ptr->title, LINES/numWins, COLS);
 			mvwin(ptr->title, counter + (LINES/numWins) * i, 0);
 			wresize(ptr->content, LINES/numWins-1, COLS);
+//			mvwin(ptr->content, counter + (LINES/numWins) * i, 0);
 		}
-		werase(ptr->title);
+//		werase(ptr->title);
 //		mvwprintw(ptr->title, 1, 1, "%s", "test");
 //		box(wins[i], 0, 0);
 	}
