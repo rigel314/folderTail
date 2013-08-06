@@ -7,7 +7,8 @@
  *  TODO: reap processes & close file descriptors
  */
 
-typedef enum { false=0, true=1 } bool;
+#define min(x, y) ((x)<(y)?(x):(y))
+#define max(x, y) ((x)>(y)?(x):(y))
 
 #include <ncurses.h>
 #include <stdio.h>
@@ -20,6 +21,10 @@ typedef enum { false=0, true=1 } bool;
 #include <sys/stat.h>
 #include <time.h>
 #include <math.h>
+#include <signal.h>
+#include <sys/select.h>
+
+// typedef enum { false=0, true=1 } bool;
 
 struct windowlist
 {
@@ -30,6 +35,8 @@ struct windowlist
 	struct stat info;
 	pid_t pid;
 	int fd;
+	int wfd;
+	int err;
 };
 
 struct windowlist* winlist;
@@ -41,6 +48,7 @@ void mkWins(struct windowlist* ent);
 char* getSizeStr(int size);
 void writeTitles(struct windowlist* list);
 void writeContents(struct windowlist* list);
+void addContents(struct windowlist* ent, char* buffer, int nBytes);
 void writeAllRefresh(struct windowlist* list);
 void refreshAll(struct windowlist* list);
 void resizeAll(struct windowlist* list);
@@ -50,6 +58,8 @@ void findAllFiles(struct windowlist** list, char* path);
 struct windowlist* winAtIndex(struct windowlist* list, int index);
 void addFile(struct windowlist** list, char* name, struct stat statinfo);
 void freeFile(struct windowlist** list, struct windowlist* win);
+pid_t startTail(struct windowlist* ptr);
+void cleanup(struct windowlist* list);
 
 void help()
 {
@@ -63,15 +73,20 @@ void help()
 int main(int argc, char** argv)
 {
 	int c;
+	int fdMax;
 	DIR* dp;
-//	struct windowlist* ptr;
+	fd_set set;
+	struct timeval tv;
+	struct windowlist* ptr;
 
+	// I only take one argument.
 	if(argc != 2)
 	{
 		help();
 		return 1;
 	}
 
+	// Check that the directory is accessible.
 	dp = opendir(argv[1]);
 	if(!dp)
 	{
@@ -80,12 +95,14 @@ int main(int argc, char** argv)
 	}
 	closedir(dp);
 
+	/* DEBUG */
 //	findAllFiles(&winlist, argv[1]);
 //	for(ptr = winlist; ptr != NULL; ptr = ptr->next)
 //		printf("%s\t%s\n", ptr->fullname, getSizeStr((int) ptr->info.st_size));
 //
 //	return 0;
 
+	// ncurses init stuff
 	initscr();
 	raw();
 	noecho();
@@ -94,20 +111,76 @@ int main(int argc, char** argv)
 	halfdelay(3);
 	refresh();
 
+	// Find new files, fork() child processes to start tailing them.  Write the title bars(and technically the blank tail outputs)
 	rescanFiles(&winlist, argv[1]);
 	writeAllRefresh(winlist);
 
-	while((c = getch()))
+	// Main loop for keypresses and files to be read.
+	while(1)
 	{
-		switch(c)
+		// Maximum file descriptor.  Needed for select().  Start at zero to ensure it will be changed to a bigger one.
+		fdMax = 0;
+
+		// Wait, at maximum, one second for new input, then check for new or deleted files.
+		tv.tv_sec=1;
+		tv.tv_usec=0;
+
+		// Zero out the set, then add 0 to the set to monitor stdin for keypresses.
+		FD_ZERO(&set);
+		FD_SET(0, &set);
+
+		// Add each file descriptor to the set and keep track of the highest file descriptor.
+		for(ptr = winlist; ptr != NULL; ptr = ptr->next)
 		{
-			case 'Q':
-			case 'q':
-			case 10:
-				endwin();
-				return 0;
-				break;
+			fdMax = max(fdMax, ptr->fd);
+			FD_SET(ptr->fd, &set);
 		}
+
+		// Monitor all fds for readability.
+		if(select(fdMax+1, &set, NULL, NULL, &tv) == -1)
+			if (errno != EINTR && errno != EAGAIN)
+			{
+				cleanup(winlist);
+				endwin();
+				return 4;
+			}
+
+		// A key was pressed.
+		if(FD_ISSET(0, &set))
+		{
+			c = getch();
+			switch(c)
+			{
+				case 'Q':
+				case 'q':
+				case 10:
+					cleanup(winlist);
+					endwin();
+					return 0;
+					break;
+			}
+		}
+
+		// Check if any others are readable.
+		for(ptr = winlist; ptr != NULL; ptr = ptr->next)
+		{
+			char* buffer;
+			int maxBytes = 65536;
+			int nBytes;
+
+			if(FD_ISSET(ptr->fd, &set))
+			{
+				buffer = malloc(maxBytes);
+
+				nBytes = read(ptr->fd, buffer, maxBytes);
+
+				if (nBytes != -1)
+					addContents(ptr, buffer, nBytes);
+
+				free(buffer);
+			}
+		}
+
 		rescanFiles(&winlist, argv[1]);
 		writeAllRefresh(winlist);
 	}
@@ -176,6 +249,7 @@ void writeTitles(struct windowlist* list)
 	struct tm time;
 	int r, c, len, i;
 	char* size;
+	char fmt[] = "fd=%d pid=%d %s - %d/%.2d/%.2d %.2d:%.2d:%.2d";
 
 	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
@@ -195,8 +269,8 @@ void writeTitles(struct windowlist* list)
 		if(!size)
 			continue;
 		localtime_r(&ptr->info.st_mtime, &time);
-		len = snprintf(NULL, 0, "%s - %d/%.2d/%.2d %.2d:%.2d:%.2d", size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
-		mvwprintw(ptr->title, r-1, c-len, "%s - %d/%.2d/%.2d %.2d:%.2d:%.2d", size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+		len = snprintf(NULL, 0, fmt, ptr->fd, ptr->pid, size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+		mvwprintw(ptr->title, r-1, c-len, fmt, ptr->fd, ptr->pid, size, time.tm_year+1900, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
 		free(size);
 
 		// Stop highlighting
@@ -207,11 +281,21 @@ void writeTitles(struct windowlist* list)
 void writeContents(struct windowlist* list)
 {
 	struct windowlist* ptr;
-	static int c = 0;
 
 	for(ptr = list; ptr != NULL; ptr = ptr->next)
 	{
-		wprintw(ptr->content, "test%d: %p\naoeu\n", c++, ptr);
+		if(ptr->err == -1)
+			mvwprintw(ptr->content, 0, 0, "ERROR: %d: %s ", ptr->err, strerror(ptr->err));
+	}
+}
+
+void addContents(struct windowlist* ent, char* buffer, int nBytes)
+{
+	int i;
+
+	for(i = 0; i<nBytes; i++)
+	{
+		waddch(ent->content, buffer[i]);
 	}
 }
 
@@ -369,6 +453,7 @@ struct windowlist* winAtIndex(struct windowlist* list, int index)
 void addFile(struct windowlist** list, char* name, struct stat statinfo)
 {
 	struct windowlist* ptr;
+	int fds[2];
 
 	if(!list)
 		return;
@@ -385,15 +470,35 @@ void addFile(struct windowlist** list, char* name, struct stat statinfo)
 	new->next = NULL;
 	mkWins(new);
 
+	new->pid = -1;
+	new->fd = -1;
+	new->wfd = -1;
+
 	if(!*list)
 	{
 		*list = new;
+	}
+	else
+	{
+		for(ptr = *list; ptr->next != NULL; ptr = ptr->next);
+
+		ptr->next = new;
+	}
+
+	if(pipe(fds) == -1)
+	{
+		new->err = errno;
 		return;
 	}
 
-	for(ptr = *list; ptr->next != NULL; ptr = ptr->next);
-
-	ptr->next = new;
+	new->fd = fds[0];
+	new->wfd = fds[1];
+	new->pid = startTail(new);
+	if(new->pid == -1)
+	{
+		new->err = errno;
+		return;
+	}
 }
 
 void freeFile(struct windowlist** list, struct windowlist* win)
@@ -411,12 +516,48 @@ void freeFile(struct windowlist** list, struct windowlist* win)
 			delwin(ptr->content);
 			delwin(ptr->title);
 			free(ptr->fullname);
+			kill(ptr->pid, SIGKILL);
+			close(ptr->fd);
+			close(ptr->wfd);
+
 			if(last)
 				last->next = ptr->next;
 			else
 				*list = ptr->next;
+
 			free(ptr);
 			return;
 		}
+	}
+}
+
+pid_t startTail(struct windowlist* ptr)
+{
+	pid_t child;
+
+	child = fork();
+	if(!child)
+	{
+		close(1);
+		dup(ptr->wfd);
+		execlp("tail", "tail", "-f", ptr->fullname, (char*) NULL);
+		exit(3);
+	}
+
+	return child;
+}
+
+void cleanup(struct windowlist* list)
+{
+	struct windowlist* ptr;
+
+	for(ptr=list; ptr!=NULL; ptr=ptr->next)
+	{
+		if(ptr->pid != -1)
+			kill(ptr->pid, SIGKILL);
+		if(ptr->fd != -1)
+			close(ptr->fd);
+		if(ptr->wfd != -1)
+			close(ptr->wfd);
 	}
 }
