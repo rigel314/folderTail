@@ -1,14 +1,14 @@
 builddir = build
 srcdir = .
 objects = $(builddir)/main.o
-options = -lm -lncurses
+options = -lm -lncurses -ltinfo
 out = $(builddir)/folderTail
 
 all : $(out)
 
 $(out) : $(objects)
 	cc -o $(out) $(objects) $(options)
-$(builddir)/main.o :
+$(builddir)/main.o : main.c Makefile
 	cc -o $(builddir)/main.o -c $(srcdir)/main.c
 
 install : $(out)

@@ -23,6 +23,7 @@
 #include <math.h>
 #include <signal.h>
 #include <sys/select.h>
+#include <sys/wait.h>
 
 // typedef enum { false=0, true=1 } bool;
 
@@ -37,6 +38,7 @@ struct windowlist
 	int fd;
 	int wfd;
 	int err;
+	int skippednewline;
 };
 
 struct windowlist* winlist;
@@ -168,6 +170,8 @@ int main(int argc, char** argv)
 					break;
 			}
 		}
+
+		waitpid(-1, NULL, WNOHANG);
 
 		// Check if any others are readable.
 		for(ptr = winlist; ptr != NULL; ptr = ptr->next)
@@ -301,8 +305,17 @@ void addContents(struct windowlist* ent, char* buffer, int nBytes)
 {
 	int i;
 
+	if (ent->skippednewline){
+		waddch(ent->content, '\n');
+		ent->skippednewline = false;
+	}
+
 	for(i = 0; i<nBytes; i++)
 	{
+		if (i == nBytes-1 && buffer[i] == '\n'){
+			ent->skippednewline = true;
+			break;
+		}
 		waddch(ent->content, buffer[i]);
 	}
 }
@@ -474,13 +487,17 @@ void addFile(struct windowlist** list, char* name, struct stat statinfo)
 
 	new->fullname = strdup(name);
 	if(!new->fullname)
+	{
+		free(new);
 		return;
+	}
 
 	new->info = statinfo;
 	new->next = NULL;
 	mkWins(new);
 
 	new->err = 0;
+	new->skippednewline = 0;
 	new->pid = -1;
 	new->fd = -1;
 	new->wfd = -1;
@@ -534,7 +551,8 @@ void freeFile(struct windowlist** list, struct windowlist* win)
 
 			if(last)
 				last->next = ptr->next;
-			*list = ptr->next;
+			if(ptr==*list)
+				*list = ptr->next;
 
 			free(ptr);
 			return;
